@@ -11,16 +11,24 @@ use pdfcraft_cos::{SaveOptions, write_full};
 
 use crate::{DocId, EditError, Hidden, OptimizeReport, Session, guard, optimize};
 
-/// Output quality for a newly combined PDF. Original preserves the combined bytes exactly.
+/// Compression preset for a newly combined PDF.
+///
+/// [`Original`](Self::Original) leaves the combined bytes unchanged; the other presets reuse
+/// the optimizer and keep the original if optimization does not make the whole PDF smaller.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CombineQuality {
+    /// Keep the combined PDF exactly as written, with no optimization.
     #[default]
     Original,
+    /// Downsample images above 225 PPI to 150 PPI, using JPEG quality 60.
     Balanced,
+    /// Downsample images above 144 PPI to 96 PPI, using JPEG quality 45.
     Compact,
 }
 
 impl CombineQuality {
+    /// Parse the stable lowercase names used by automation and command interfaces.
+    /// Returns `None` for any unrecognized value.
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "original" => Some(Self::Original),

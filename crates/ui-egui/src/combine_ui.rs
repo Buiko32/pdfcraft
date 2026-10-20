@@ -232,6 +232,7 @@ struct CombineCompression {
 
 type CompressionResult = Result<Arc<Vec<u8>>, pdfcraft_engine::EditError>;
 
+/// Localized name of a Combine output preset.
 fn quality_label(quality: CombineQuality) -> &'static str {
     match quality {
         CombineQuality::Original => tl!("Original (lossless)"),
@@ -2410,12 +2411,13 @@ impl PdfCraftApp {
         }
     }
 
-    /// Close the Combine files tab and forget its list; the last document shows, if any.
+    /// Close the Combine files tab and forget its list; keep pending output until it opens.
     pub fn close_combine_tab(&mut self) {
         let showing = self.combine_showing();
         // (Revisions keep counting: a drag begun before can never match a list made after.)
         let revision = self.combine_tab.revision.wrapping_add(1);
-        self.combine_tab = CombineTab { revision, ..CombineTab::default() };
+        let compression = self.combine_tab.compression.take();
+        self.combine_tab = CombineTab { revision, compression, ..CombineTab::default() };
         self.combine_draft.clear();
         self.combine_thumbs.clear();
         if showing {
@@ -2648,6 +2650,7 @@ impl PdfCraftApp {
         self.poll_combine_compression();
     }
 
+    /// Drain the tracked worker result even when the Combine tab has been closed.
     pub(crate) fn poll_combine_compression(&mut self) {
         let Some(run) = &self.combine_tab.compression else { return };
         let result = match run.result.lock() {
@@ -2665,6 +2668,7 @@ impl PdfCraftApp {
         self.finish_combine(result, count, revision);
     }
 
+    /// Open completed output without clearing a draft changed since the job started.
     fn finish_combine(&mut self, result: CompressionResult, count: usize, revision: u64) {
         match result {
             Ok(bytes) => {
@@ -2704,6 +2708,36 @@ mod tests {
         app.poll_combine_compression();
         assert_eq!(app.combine_draft.len(), 2);
         assert_eq!(app.views.len(), 1);
+        assert!(app.combine_tab.compression.is_none());
+    }
+
+    /// Closing a tab retains its worker and completion cannot replace a newly staged list.
+    #[test]
+    fn closing_and_reopening_combine_keeps_pending_compression_and_new_draft() {
+        let mut app = PdfCraftApp::new();
+        app.stage_combine(vec![("one.txt".into(), b"One".to_vec())]);
+        let started_at = app.combine_tab.revision;
+        let result = Arc::new(Mutex::new(None));
+        app.combine_tab.compression = Some(CombineCompression { result: result.clone(), count: 1, revision: started_at });
+
+        app.close_combine_tab();
+        assert!(app.combine_draft.is_empty());
+        assert!(app.combine_tab.compression.is_some(), "closing keeps the pending compression attached");
+
+        app.stage_combine(vec![("new.txt".into(), b"Two".to_vec())]);
+        let reopened_at = app.combine_tab.revision;
+        assert_ne!(reopened_at, started_at, "the reopened list has a new revision");
+        app.combine_staged();
+        assert!(Arc::ptr_eq(&result, &app.combine_tab.compression.as_ref().unwrap().result), "a pending worker blocks a second combine");
+
+        let completed_pdf = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        *result.lock().unwrap() = Some(Ok(completed_pdf));
+        app.poll_combine_compression();
+
+        assert_eq!(app.views.len(), 1, "the completed PDF still opens");
+        assert_eq!(app.combine_draft.len(), 1, "finishing old work doesn't clear the reopened draft");
+        assert_eq!(app.combine_draft[0].name, "new.txt");
+        assert!(app.combine_tab.open);
         assert!(app.combine_tab.compression.is_none());
     }
 

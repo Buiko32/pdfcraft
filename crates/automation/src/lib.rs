@@ -1621,6 +1621,7 @@ impl Automation {
         Ok(out)
     }
 
+    /// Combine permitted input files, apply the requested quality, then publish atomically.
     fn doc_combine(&mut self, a: &Args) -> Result<Value> {
         let quality = pdfcraft_engine::optimizer::CombineQuality::parse(a.opt_str("quality")?.unwrap_or("original"))
             .ok_or_else(|| Args::wrong("quality", "original, balanced or compact"))?;
